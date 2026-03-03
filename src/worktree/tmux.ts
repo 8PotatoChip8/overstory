@@ -118,23 +118,12 @@ export async function createSession(
 		});
 	}
 
-	// Retrieve the actual PID of the process running inside the tmux pane
-	const pidResult = await runCommand(["tmux", "list-panes", "-t", name, "-F", "#{pane_pid}"]);
-
-	if (pidResult.exitCode !== 0) {
-		throw new AgentError(
-			`Created tmux session "${name}" but failed to retrieve PID: ${pidResult.stderr.trim()}`,
-			{ agentName: name },
-		);
-	}
-
-	const pidStr = pidResult.stdout.trim().split("\n")[0];
-	if (pidStr) {
-		const pid = Number.parseInt(pidStr, 10);
-		if (!Number.isNaN(pid)) {
-			return pid;
-		}
-	}
+	// Retrieve the actual PID of the process running inside the tmux pane.
+	// Some tmux builds (seen on Ubuntu 24.04) can resolve `-t <session>` as a
+	// window target and fail with "can't find window". Querying all panes and
+	// filtering by session_name avoids target-resolution ambiguity.
+	const pid = await getPanePid(name);
+	if (pid !== null) return pid;
 
 	throw new AgentError(`Created tmux session "${name}" but could not find its pane PID`, {
 		agentName: name,
@@ -197,6 +186,26 @@ const KILL_GRACE_PERIOD_MS = 2000;
  *          the session doesn't exist or the PID can't be determined
  */
 export async function getPanePid(name: string): Promise<number | null> {
+	// Robust strategy: list all panes across sessions and match by session_name.
+	// This avoids tmux target parsing differences across versions/platforms.
+	const allPanes = await runCommand([
+		"tmux",
+		"list-panes",
+		"-a",
+		"-F",
+		"#{session_name}:#{pane_pid}",
+	]);
+	if (allPanes.exitCode === 0) {
+		for (const line of allPanes.stdout.split("\n")) {
+			const trimmed = line.trim();
+			if (!trimmed.startsWith(`${name}:`)) continue;
+			const pidStr = trimmed.slice(name.length + 1);
+			const pid = Number.parseInt(pidStr, 10);
+			if (!Number.isNaN(pid)) return pid;
+		}
+	}
+
+	// Fallback for older behavior.
 	const { exitCode, stdout } = await runCommand([
 		"tmux",
 		"display-message",
