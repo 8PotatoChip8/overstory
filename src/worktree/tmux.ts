@@ -91,7 +91,7 @@ export async function createSession(
 	cwd: string,
 	command: string,
 	env?: Record<string, string>,
-): Promise<number> {
+): Promise<number | null> {
 	// Build environment exports for the tmux session
 	const exports: string[] = [];
 
@@ -146,9 +146,15 @@ export async function createSession(
 		await sleep(75);
 	}
 
+	// Final fallback: if the session is still alive, continue with unknown PID.
+	// Overstory can operate with pid=null and still manage sessions via tmux.
+	const finalState = await checkSessionState(name);
+	if (finalState === "alive") {
+		return null;
+	}
+
 	throw new AgentError(
-		`Created tmux session "${name}" but could not find its pane PID after retrying. ` +
-			`Try running 'tmux list-panes -a -F "#{session_name}:#{pane_pid}"' manually.`,
+		`Created tmux session "${name}" but it was not stable enough to retrieve a pane PID (${finalState}).`,
 		{ agentName: name },
 	);
 }

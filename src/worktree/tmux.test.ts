@@ -172,7 +172,7 @@ describe("createSession", () => {
 		await expect(createSession("my-session", "/tmp", "ls")).rejects.toThrow(AgentError);
 	});
 
-	test("throws AgentError if pane PID output is empty", async () => {
+	test("returns null PID when pane PID is unavailable but session stays alive", async () => {
 		let callCount = 0;
 		spawnSpy.mockImplementation(() => {
 			callCount++;
@@ -187,7 +187,43 @@ describe("createSession", () => {
 			return mockSpawnResult("", "", 0);
 		});
 
-		await expect(createSession("my-session", "/tmp", "ls")).rejects.toThrow(AgentError);
+		const pid = await createSession("my-session", "/tmp", "ls");
+		expect(pid).toBeNull();
+	});
+
+	test("fails fast when session dies immediately after startup", async () => {
+		let callCount = 0;
+		spawnSpy.mockImplementation((...args: unknown[]) => {
+			callCount++;
+			const cmd = args[0] as string[];
+
+			if (callCount === 1) {
+				// which overstory
+				return mockSpawnResult("/usr/local/bin/overstory\n", "", 0);
+			}
+			if (callCount === 2) {
+				// tmux new-session
+				return mockSpawnResult("", "", 0);
+			}
+			if (cmd[0] === "tmux" && cmd[1] === "list-panes") {
+				// no pane found
+				return mockSpawnResult("", "", 0);
+			}
+			if (cmd[0] === "tmux" && cmd[1] === "display-message") {
+				// fallback also has no pid
+				return mockSpawnResult("", "can't find session", 1);
+			}
+			if (cmd[0] === "tmux" && cmd[1] === "has-session") {
+				// session vanished immediately
+				return mockSpawnResult("", "no server running on /tmp/tmux-1000/default", 1);
+			}
+
+			return mockSpawnResult("", "", 0);
+		});
+
+		await expect(createSession("my-session", "/tmp", "ls")).rejects.toThrow(
+			/Tmux session "my-session" exited immediately after startup \(no_server\)/,
+		);
 	});
 
 	test("fails fast when session dies immediately after startup", async () => {
