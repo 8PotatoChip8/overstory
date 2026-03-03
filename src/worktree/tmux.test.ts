@@ -127,16 +127,16 @@ describe("createSession", () => {
 			if (callCount === 2) {
 				return mockSpawnResult("", "", 0);
 			}
-			return mockSpawnResult("7777\n", "", 0);
+			return mockSpawnResult("test-agent:7777\n", "", 0);
 		});
 
 		await createSession("test-agent", "/tmp", "ls");
 
-		// 3 calls: which overstory, tmux new-session, tmux list-panes
+		// 3 calls: which overstory, tmux new-session, tmux list-panes -a
 		expect(spawnSpy).toHaveBeenCalledTimes(3);
 		const thirdCallArgs = spawnSpy.mock.calls[2] as unknown[];
 		const cmd = thirdCallArgs[0] as string[];
-		expect(cmd).toEqual(["tmux", "list-panes", "-t", "test-agent", "-F", "#{pane_pid}"]);
+		expect(cmd).toEqual(["tmux", "list-panes", "-a", "-F", "#{session_name}:#{pane_pid}"]);
 	});
 
 	test("throws AgentError if session creation fails", async () => {
@@ -188,6 +188,41 @@ describe("createSession", () => {
 		});
 
 		await expect(createSession("my-session", "/tmp", "ls")).rejects.toThrow(AgentError);
+	});
+
+	test("fails fast when session dies immediately after startup", async () => {
+		let callCount = 0;
+		spawnSpy.mockImplementation((...args: unknown[]) => {
+			callCount++;
+			const cmd = args[0] as string[];
+
+			if (callCount === 1) {
+				// which overstory
+				return mockSpawnResult("/usr/local/bin/overstory\n", "", 0);
+			}
+			if (callCount === 2) {
+				// tmux new-session
+				return mockSpawnResult("", "", 0);
+			}
+			if (cmd[0] === "tmux" && cmd[1] === "list-panes") {
+				// no pane found
+				return mockSpawnResult("", "", 0);
+			}
+			if (cmd[0] === "tmux" && cmd[1] === "display-message") {
+				// fallback also has no pid
+				return mockSpawnResult("", "can't find session", 1);
+			}
+			if (cmd[0] === "tmux" && cmd[1] === "has-session") {
+				// session vanished immediately
+				return mockSpawnResult("", "no server running on /tmp/tmux-1000/default", 1);
+			}
+
+			return mockSpawnResult("", "", 0);
+		});
+
+		await expect(createSession("my-session", "/tmp", "ls")).rejects.toThrow(
+			/Tmux session "my-session" exited immediately after startup \(no_server\)/,
+		);
 	});
 
 	test("AgentError includes session name context", async () => {
@@ -328,15 +363,15 @@ describe("getPanePid", () => {
 		spawnSpy.mockRestore();
 	});
 
-	test("returns PID from tmux display-message", async () => {
-		spawnSpy.mockImplementation(() => mockSpawnResult("42\n", "", 0));
+	test("returns PID from tmux list-panes", async () => {
+		spawnSpy.mockImplementation(() => mockSpawnResult("overstory-auth:42\n", "", 0));
 
 		const pid = await getPanePid("overstory-auth");
 
 		expect(pid).toBe(42);
 		const callArgs = spawnSpy.mock.calls[0] as unknown[];
 		const cmd = callArgs[0] as string[];
-		expect(cmd).toEqual(["tmux", "display-message", "-p", "-t", "overstory-auth", "#{pane_pid}"]);
+		expect(cmd).toEqual(["tmux", "list-panes", "-a", "-F", "#{session_name}:#{pane_pid}"]);
 	});
 
 	test("returns null when session does not exist", async () => {
@@ -632,9 +667,9 @@ describe("killSession", () => {
 			const cmd = args[0] as string[];
 			cmds.push(cmd);
 
-			if (cmd[0] === "tmux" && cmd[1] === "display-message") {
+			if (cmd[0] === "tmux" && cmd[1] === "list-panes") {
 				// getPanePid → returns PID 500
-				return mockSpawnResult("500\n", "", 0);
+				return mockSpawnResult("overstory-auth:500\n", "", 0);
 			}
 			if (cmd[0] === "pgrep") {
 				// getDescendantPids → no children
@@ -650,15 +685,8 @@ describe("killSession", () => {
 
 		await killSession("overstory-auth");
 
-		// Should have called: tmux display-message, pgrep, tmux kill-session
-		expect(cmds[0]).toEqual([
-			"tmux",
-			"display-message",
-			"-p",
-			"-t",
-			"overstory-auth",
-			"#{pane_pid}",
-		]);
+		// Should have called: tmux list-panes, pgrep, tmux kill-session
+		expect(cmds[0]).toEqual(["tmux", "list-panes", "-a", "-F", "#{session_name}:#{pane_pid}"]);
 		expect(cmds[1]).toEqual(["pgrep", "-P", "500"]);
 		const lastCmd = cmds[cmds.length - 1];
 		expect(lastCmd).toEqual(["tmux", "kill-session", "-t", "overstory-auth"]);
@@ -673,8 +701,12 @@ describe("killSession", () => {
 			const cmd = args[0] as string[];
 			cmds.push(cmd);
 
+			if (cmd[0] === "tmux" && cmd[1] === "list-panes") {
+				// getPanePid primary probe has no matching pane
+				return mockSpawnResult("", "", 0);
+			}
 			if (cmd[0] === "tmux" && cmd[1] === "display-message") {
-				// getPanePid → session not found
+				// fallback probe also cannot resolve the session
 				return mockSpawnResult("", "can't find session", 1);
 			}
 			if (cmd[0] === "tmux" && cmd[1] === "kill-session") {
@@ -686,9 +718,10 @@ describe("killSession", () => {
 		await killSession("overstory-auth");
 
 		// Should go straight to tmux kill-session (no pgrep calls)
-		expect(cmds).toHaveLength(2);
-		expect(cmds[0]?.[1]).toBe("display-message");
-		expect(cmds[1]?.[1]).toBe("kill-session");
+		expect(cmds).toHaveLength(3);
+		expect(cmds[0]?.[1]).toBe("list-panes");
+		expect(cmds[1]?.[1]).toBe("display-message");
+		expect(cmds[2]?.[1]).toBe("kill-session");
 		// No process.kill calls since we had no PID
 		expect(killSpy).not.toHaveBeenCalled();
 	});
