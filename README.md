@@ -15,7 +15,6 @@ Overstory turns a single coding session into a multi-agent team by spawning work
 ### Ubuntu 24.04 Desktop (recommended)
 
 Run the bundled installer to set up system dependencies, Bun, Overstory, and required os-eco CLIs (`mulch`, `sd`, `cn`):
-Run the bundled installer to set up system dependencies, Bun, Overstory, and required os-eco CLIs (`mulch`, `sd`):
 
 ```bash
 ./install.sh

@@ -72,6 +72,10 @@ async function runCommand(
 	return { stdout, stderr, exitCode };
 }
 
+async function sleep(ms: number): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Create a new detached tmux session running the given command.
  *
@@ -122,12 +126,31 @@ export async function createSession(
 	// Some tmux builds (seen on Ubuntu 24.04) can resolve `-t <session>` as a
 	// window target and fail with "can't find window". Querying all panes and
 	// filtering by session_name avoids target-resolution ambiguity.
-	const pid = await getPanePid(name);
-	if (pid !== null) return pid;
+	// On some Linux/tmux combos, pane metadata can lag briefly after new-session.
+	// Retry a few times before declaring failure.
+	for (let attempt = 0; attempt < 8; attempt++) {
+		const pid = await getPanePid(name);
+		if (pid !== null) return pid;
 
-	throw new AgentError(`Created tmux session "${name}" but could not find its pane PID`, {
-		agentName: name,
-	});
+		// If the session already died, fail fast with a clearer diagnosis.
+		const state = await checkSessionState(name);
+		if (state !== "alive") {
+			throw new AgentError(
+				`Tmux session "${name}" exited immediately after startup (${state}). ` +
+					`The runtime command likely failed to launch inside tmux. ` +
+					`Verify your selected runtime CLI is installed and authenticated, then inspect tmux logs with: tmux ls`,
+				{ agentName: name },
+			);
+		}
+
+		await sleep(75);
+	}
+
+	throw new AgentError(
+		`Created tmux session "${name}" but could not find its pane PID after retrying. ` +
+			`Try running 'tmux list-panes -a -F "#{session_name}:#{pane_pid}"' manually.`,
+		{ agentName: name },
+	);
 }
 
 /**
