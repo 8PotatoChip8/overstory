@@ -72,6 +72,10 @@ async function runCommand(
 	return { stdout, stderr, exitCode };
 }
 
+async function sleep(ms: number): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Create a new detached tmux session running the given command.
  *
@@ -87,7 +91,7 @@ export async function createSession(
 	cwd: string,
 	command: string,
 	env?: Record<string, string>,
-): Promise<number> {
+): Promise<number | null> {
 	// Build environment exports for the tmux session
 	const exports: string[] = [];
 
@@ -118,27 +122,41 @@ export async function createSession(
 		});
 	}
 
-	// Retrieve the actual PID of the process running inside the tmux pane
-	const pidResult = await runCommand(["tmux", "list-panes", "-t", name, "-F", "#{pane_pid}"]);
+	// Retrieve the actual PID of the process running inside the tmux pane.
+	// Some tmux builds (seen on Ubuntu 24.04) can resolve `-t <session>` as a
+	// window target and fail with "can't find window". Querying all panes and
+	// filtering by session_name avoids target-resolution ambiguity.
+	// On some Linux/tmux combos, pane metadata can lag briefly after new-session.
+	// Retry a few times before declaring failure.
+	for (let attempt = 0; attempt < 8; attempt++) {
+		const pid = await getPanePid(name);
+		if (pid !== null) return pid;
 
-	if (pidResult.exitCode !== 0) {
-		throw new AgentError(
-			`Created tmux session "${name}" but failed to retrieve PID: ${pidResult.stderr.trim()}`,
-			{ agentName: name },
-		);
-	}
-
-	const pidStr = pidResult.stdout.trim().split("\n")[0];
-	if (pidStr) {
-		const pid = Number.parseInt(pidStr, 10);
-		if (!Number.isNaN(pid)) {
-			return pid;
+		// If the session already died, fail fast with a clearer diagnosis.
+		const state = await checkSessionState(name);
+		if (state !== "alive") {
+			throw new AgentError(
+				`Tmux session "${name}" exited immediately after startup (${state}). ` +
+					`The runtime command likely failed to launch inside tmux. ` +
+					`Verify your selected runtime CLI is installed and authenticated, then inspect tmux logs with: tmux ls`,
+				{ agentName: name },
+			);
 		}
+
+		await sleep(75);
 	}
 
-	throw new AgentError(`Created tmux session "${name}" but could not find its pane PID`, {
-		agentName: name,
-	});
+	// Final fallback: if the session is still alive, continue with unknown PID.
+	// Overstory can operate with pid=null and still manage sessions via tmux.
+	const finalState = await checkSessionState(name);
+	if (finalState === "alive") {
+		return null;
+	}
+
+	throw new AgentError(
+		`Created tmux session "${name}" but it was not stable enough to retrieve a pane PID (${finalState}).`,
+		{ agentName: name },
+	);
 }
 
 /**
@@ -197,6 +215,26 @@ const KILL_GRACE_PERIOD_MS = 2000;
  *          the session doesn't exist or the PID can't be determined
  */
 export async function getPanePid(name: string): Promise<number | null> {
+	// Robust strategy: list all panes across sessions and match by session_name.
+	// This avoids tmux target parsing differences across versions/platforms.
+	const allPanes = await runCommand([
+		"tmux",
+		"list-panes",
+		"-a",
+		"-F",
+		"#{session_name}:#{pane_pid}",
+	]);
+	if (allPanes.exitCode === 0) {
+		for (const line of allPanes.stdout.split("\n")) {
+			const trimmed = line.trim();
+			if (!trimmed.startsWith(`${name}:`)) continue;
+			const pidStr = trimmed.slice(name.length + 1);
+			const pid = Number.parseInt(pidStr, 10);
+			if (!Number.isNaN(pid)) return pid;
+		}
+	}
+
+	// Fallback for older behavior.
 	const { exitCode, stdout } = await runCommand([
 		"tmux",
 		"display-message",
