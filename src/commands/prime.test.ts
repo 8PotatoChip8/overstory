@@ -366,6 +366,7 @@ recentTasks: []
 !hooks.json
 !groups.json
 !agent-defs/
+!agent-defs/**
 !README.md
 `;
 

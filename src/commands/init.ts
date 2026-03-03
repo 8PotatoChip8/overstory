@@ -588,6 +588,7 @@ export const OVERSTORY_GITIGNORE = `# Wildcard+whitelist: ignore everything, whi
 !hooks.json
 !groups.json
 !agent-defs/
+!agent-defs/**
 !README.md
 `;
 

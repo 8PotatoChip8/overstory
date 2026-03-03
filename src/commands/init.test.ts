@@ -166,6 +166,7 @@ describe("initCommand: .overstory/.gitignore", () => {
 		expect(content).toContain("!hooks.json\n");
 		expect(content).toContain("!groups.json\n");
 		expect(content).toContain("!agent-defs/\n");
+		expect(content).toContain("!agent-defs/**\n");
 
 		// Verify it matches the exported constant
 		expect(content).toBe(OVERSTORY_GITIGNORE);

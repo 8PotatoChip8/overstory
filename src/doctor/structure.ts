@@ -111,6 +111,7 @@ export const checkStructure: DoctorCheckFn = async (
 		"!hooks.json",
 		"!groups.json",
 		"!agent-defs/",
+		"!agent-defs/**",
 	];
 
 	try {

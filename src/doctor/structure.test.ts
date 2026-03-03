@@ -114,6 +114,7 @@ describe("checkStructure", () => {
 !hooks.json
 !groups.json
 !agent-defs/
+!agent-defs/**
 `,
 		);
 
