@@ -12,6 +12,16 @@ Overstory turns a single coding session into a multi-agent team by spawning work
 
 ## Install
 
+### Ubuntu 24.04 Desktop (recommended)
+
+Run the bundled installer to set up system dependencies, Bun, Overstory, and required os-eco CLIs (`mulch`, `sd`, `cn`):
+
+```bash
+./install.sh
+```
+
+### Manual install (all platforms)
+
 Requires [Bun](https://bun.sh) v1.0+, git, and tmux. At least one supported agent runtime must be installed:
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` CLI)
