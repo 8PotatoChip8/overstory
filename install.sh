@@ -73,6 +73,7 @@ export PATH="$HOME/.bun/bin:$PATH"
 require_command bun
 
 echo "==> Installing Overstory and required os-eco CLIs"
+bun install -g @os-eco/mulch-cli @os-eco/seeds-cli @os-eco/canopy-cli @os-eco/overstory-cli
 bun install -g @os-eco/overstory-cli @os-eco/mulch-cli @os-eco/seeds-cli
 
 ensure_path_line "$HOME/.bashrc"
@@ -86,6 +87,7 @@ require_command overstory
 require_command mulch
 require_command ml
 require_command sd
+require_command cn
 
 cat <<'DONE'
 
